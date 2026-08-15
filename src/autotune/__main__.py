@@ -61,16 +61,30 @@ def validate_campaign_contract(manifest: Any) -> list[str]:
     return errors
 
 
-def validate_command(path_value: str) -> int:
-    path = Path(path_value)
+def _read_json(path: Path, subject: str) -> tuple[Any | None, int | None]:
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8")), None
     except OSError as error:
-        print(f"Cannot read campaign manifest: {error}", file=sys.stderr)
-        return 2
+        print(f"Cannot read {subject}: {error}", file=sys.stderr)
+        return None, 2
     except json.JSONDecodeError as error:
-        print(f"Invalid JSON in campaign manifest: {error.msg}", file=sys.stderr)
+        print(f"Invalid JSON in {subject}: {error.msg}", file=sys.stderr)
+        return None, 2
+
+
+def _write_json(path: Path, value: Any) -> int:
+    try:
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Cannot write dossier: {error}", file=sys.stderr)
         return 2
+    return 0
+
+
+def validate_command(path_value: str) -> int:
+    manifest, read_error = _read_json(Path(path_value), "campaign manifest")
+    if read_error is not None:
+        return read_error
 
     errors = validate_campaign_contract(manifest)
     if errors:
@@ -83,12 +97,103 @@ def validate_command(path_value: str) -> int:
     return 0
 
 
+def initialize_dossier_command(manifest_path_value: str, dossier_path_value: str) -> int:
+    manifest, read_error = _read_json(Path(manifest_path_value), "campaign manifest")
+    if read_error is not None:
+        return read_error
+
+    errors = validate_campaign_contract(manifest)
+    if errors:
+        print("Campaign contract is invalid:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    dossier = {
+        "schema_version": 1,
+        "campaign_id": manifest["campaign_id"],
+        "model": {
+            "id": manifest["model"]["id"],
+            "architecture": manifest["model"]["architecture"],
+        },
+        "target": {
+            "gpu_arch": manifest["target"]["gpu_arch"],
+            "compute_units": manifest["target"]["compute_units"],
+        },
+        "facts": [],
+        "compatibility": [],
+        "techniques": [],
+    }
+    dossier_path = Path(dossier_path_value)
+    write_error = _write_json(dossier_path, dossier)
+    if write_error:
+        return write_error
+    print(json.dumps({"created": str(dossier_path)}))
+    return 0
+
+
+def validate_technique(technique: Any) -> list[str]:
+    errors: list[str] = []
+    record = _required_mapping(technique, "technique", errors)
+    _required_string(record.get("id"), "technique.id", errors)
+    _required_string(record.get("lane"), "technique.lane", errors)
+    _required_string(record.get("provenance"), "technique.provenance", errors)
+    preconditions = record.get("preconditions")
+    if not isinstance(preconditions, list) or not preconditions:
+        errors.append("technique.preconditions must be a non-empty list")
+    elif any(not isinstance(precondition, str) or not precondition.strip() for precondition in preconditions):
+        errors.append("technique.preconditions must contain non-empty strings")
+    return errors
+
+
+def add_technique_command(dossier_path_value: str, technique_path_value: str) -> int:
+    dossier_path = Path(dossier_path_value)
+    dossier, dossier_read_error = _read_json(dossier_path, "dossier")
+    if dossier_read_error is not None:
+        return dossier_read_error
+    technique, technique_read_error = _read_json(Path(technique_path_value), "technique")
+    if technique_read_error is not None:
+        return technique_read_error
+
+    dossier_errors = []
+    dossier_record = _required_mapping(dossier, "dossier", dossier_errors)
+    techniques = dossier_record.get("techniques")
+    if not isinstance(techniques, list):
+        dossier_errors.append("dossier.techniques must be a list")
+    technique_errors = validate_technique(technique)
+    errors = dossier_errors + technique_errors
+    if errors:
+        print("Technique cannot be added:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    if any(existing.get("id") == technique["id"] for existing in techniques if isinstance(existing, dict)):
+        print(f"Technique cannot be added:\n- technique.id {technique['id']} already exists", file=sys.stderr)
+        return 2
+    techniques.append(technique)
+    write_error = _write_json(dossier_path, dossier_record)
+    if write_error:
+        return write_error
+    print(json.dumps({"added": technique["id"]}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) == 3 and arguments[:2] == ["campaign", "validate"]:
         return validate_command(arguments[2])
+    if len(arguments) == 5 and arguments[:3] == ["campaign", "dossier", "initialize"]:
+        return initialize_dossier_command(arguments[3], arguments[4])
+    if len(arguments) == 5 and arguments[:3] == ["campaign", "dossier", "add-technique"]:
+        return add_technique_command(arguments[3], arguments[4])
 
-    print("Usage: python -m autotune campaign validate <manifest.json>", file=sys.stderr)
+    print(
+        "Usage: python -m autotune campaign validate <manifest.json>\n"
+        "       python -m autotune campaign dossier initialize <manifest.json> <dossier.json>\n"
+        "       python -m autotune campaign dossier add-technique <dossier.json> <technique.json>",
+        file=sys.stderr,
+    )
     return 2
 
 

@@ -24,6 +24,16 @@ The best Campaign configuration that has passed its promotion rule so far.
 A named workload and measurement procedure used to compare a Candidate with an
 Incumbent.
 
+## Model dossier
+
+A versioned campaign record of the model architecture and target-runtime facts
+that constrain candidate selection.
+
+## Technique catalog
+
+The set of candidate techniques a Campaign may consider, each with a lane,
+preconditions, and provenance.
+
 ## Evidence bundle
 
 The immutable record of an Attempt: inputs, environment, commands, metrics,
