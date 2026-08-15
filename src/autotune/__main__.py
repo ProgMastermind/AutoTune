@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -179,6 +180,82 @@ def add_technique_command(dossier_path_value: str, technique_path_value: str) ->
     return 0
 
 
+def validate_scenario(scenario: Any) -> list[str]:
+    errors: list[str] = []
+    record = _required_mapping(scenario, "scenario", errors)
+    _required_string(record.get("attempt_id"), "scenario.attempt_id", errors)
+    outcome = record.get("outcome")
+    allowed_outcomes = {"completed", "retryable_failure", "terminal_failure"}
+    if outcome not in allowed_outcomes:
+        errors.append(
+            "scenario.outcome must be completed, retryable_failure, or terminal_failure"
+        )
+    if outcome == "completed":
+        metrics = record.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            errors.append("scenario.metrics must be a non-empty object for completed outcomes")
+    if outcome in {"retryable_failure", "terminal_failure"}:
+        failure = _required_mapping(record.get("failure"), "scenario.failure", errors)
+        _required_string(
+            failure.get("classification"), "scenario.failure.classification", errors
+        )
+    commands = record.get("commands", [])
+    if not isinstance(commands, list) or any(
+        not isinstance(command, str) or not command.strip() for command in commands
+    ):
+        errors.append("scenario.commands must be a list of non-empty strings")
+    environment = record.get("environment", {})
+    if not isinstance(environment, dict):
+        errors.append("scenario.environment must be an object")
+    return errors
+
+
+def evaluate_command(
+    manifest_path_value: str, scenario_path_value: str, evidence_path_value: str
+) -> int:
+    manifest, manifest_read_error = _read_json(Path(manifest_path_value), "campaign manifest")
+    if manifest_read_error is not None:
+        return manifest_read_error
+    contract_errors = validate_campaign_contract(manifest)
+    if contract_errors:
+        print("Campaign contract is invalid:", file=sys.stderr)
+        for error in contract_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    scenario, scenario_read_error = _read_json(Path(scenario_path_value), "scenario")
+    if scenario_read_error is not None:
+        return scenario_read_error
+    scenario_errors = validate_scenario(scenario)
+    if scenario_errors:
+        print("Evaluation scenario is invalid:", file=sys.stderr)
+        for error in scenario_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    evidence = {
+        "schema_version": 1,
+        "campaign_id": manifest["campaign_id"],
+        "campaign_contract_sha256": hashlib.sha256(
+            json.dumps(manifest, sort_keys=True).encode()
+        ).hexdigest(),
+        "attempt_id": scenario["attempt_id"],
+        "status": scenario["outcome"],
+        "commands": scenario.get("commands", []),
+        "environment": scenario.get("environment", {}),
+    }
+    if scenario["outcome"] == "completed":
+        evidence["metrics"] = scenario["metrics"]
+    else:
+        evidence["failure"] = scenario["failure"]
+
+    write_error = _write_json(Path(evidence_path_value), evidence)
+    if write_error:
+        return write_error
+    print(json.dumps({"status": scenario["outcome"]}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) == 3 and arguments[:2] == ["campaign", "validate"]:
@@ -187,11 +264,14 @@ def main(argv: list[str] | None = None) -> int:
         return initialize_dossier_command(arguments[3], arguments[4])
     if len(arguments) == 5 and arguments[:3] == ["campaign", "dossier", "add-technique"]:
         return add_technique_command(arguments[3], arguments[4])
+    if len(arguments) == 5 and arguments[:2] == ["campaign", "evaluate"]:
+        return evaluate_command(arguments[2], arguments[3], arguments[4])
 
     print(
         "Usage: python -m autotune campaign validate <manifest.json>\n"
         "       python -m autotune campaign dossier initialize <manifest.json> <dossier.json>\n"
-        "       python -m autotune campaign dossier add-technique <dossier.json> <technique.json>",
+        "       python -m autotune campaign dossier add-technique <dossier.json> <technique.json>\n"
+        "       python -m autotune campaign evaluate <manifest.json> <scenario.json> <evidence.json>",
         file=sys.stderr,
     )
     return 2

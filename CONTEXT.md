@@ -39,6 +39,11 @@ preconditions, and provenance.
 The immutable record of an Attempt: inputs, environment, commands, metrics,
 artifacts, and failure information.
 
+## Attempt
+
+One execution of a baseline or Candidate evaluation, ending as completed,
+retryable failure, or terminal failure.
+
 ## Promotion
 
 The evidence-gated act of making a Candidate the Campaign's new Incumbent.
