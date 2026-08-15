@@ -15,6 +15,11 @@ evaluation profile, correctness requirements, comparison rule, and budget.
 One reversible intervention that a Campaign evaluates against its current
 Incumbent.
 
+## Decision
+
+The recorded explanation of whether a Campaign should evaluate one Candidate or
+stop because its Budget or available evidence disallows another Attempt.
+
 ## Incumbent
 
 The best Campaign configuration that has passed its promotion rule so far.

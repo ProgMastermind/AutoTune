@@ -256,6 +256,83 @@ def evaluate_command(
     return 0
 
 
+def decide_command(
+    manifest_path_value: str,
+    dossier_path_value: str,
+    history_path_value: str,
+    decision_path_value: str,
+) -> int:
+    manifest, manifest_read_error = _read_json(Path(manifest_path_value), "campaign manifest")
+    if manifest_read_error is not None:
+        return manifest_read_error
+    contract_errors = validate_campaign_contract(manifest)
+    if contract_errors:
+        print("Campaign contract is invalid:", file=sys.stderr)
+        for error in contract_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    dossier, dossier_read_error = _read_json(Path(dossier_path_value), "dossier")
+    if dossier_read_error is not None:
+        return dossier_read_error
+    history, history_read_error = _read_json(Path(history_path_value), "history")
+    if history_read_error is not None:
+        return history_read_error
+
+    errors: list[str] = []
+    dossier_record = _required_mapping(dossier, "dossier", errors)
+    history_record = _required_mapping(history, "history", errors)
+    techniques = dossier_record.get("techniques")
+    attempts = history_record.get("attempts")
+    evaluated_ids = history_record.get("evaluated_technique_ids")
+    if not isinstance(techniques, list):
+        errors.append("dossier.techniques must be a list")
+    if not isinstance(attempts, list):
+        errors.append("history.attempts must be a list")
+    if not isinstance(evaluated_ids, list) or any(
+        not isinstance(identifier, str) for identifier in evaluated_ids or []
+    ):
+        errors.append("history.evaluated_technique_ids must be a list of strings")
+    if errors:
+        print("Decision inputs are invalid:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    if len(attempts) >= manifest["budget"]["max_attempts"]:
+        decision = {"action": "stop", "reason": "max_attempts_exhausted"}
+    else:
+        candidate = next(
+            (
+                technique
+                for technique in techniques
+                if isinstance(technique, dict)
+                and not validate_technique(technique)
+                and technique["id"] not in evaluated_ids
+            ),
+            None,
+        )
+        if candidate is None:
+            decision = {"action": "stop", "reason": "no_unevaluated_technique"}
+        else:
+            decision = {
+                "action": "evaluate",
+                "candidate_id": candidate["id"],
+                "lane": candidate["lane"],
+                "max_additional_attempts": 1,
+                "rationale": (
+                    "Unevaluated Technique Catalog entry with documented preconditions "
+                    "and provenance."
+                ),
+            }
+
+    write_error = _write_json(Path(decision_path_value), decision)
+    if write_error:
+        return write_error
+    print(json.dumps({"action": decision["action"]}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) == 3 and arguments[:2] == ["campaign", "validate"]:
@@ -266,12 +343,15 @@ def main(argv: list[str] | None = None) -> int:
         return add_technique_command(arguments[3], arguments[4])
     if len(arguments) == 5 and arguments[:2] == ["campaign", "evaluate"]:
         return evaluate_command(arguments[2], arguments[3], arguments[4])
+    if len(arguments) == 6 and arguments[:2] == ["campaign", "decide"]:
+        return decide_command(arguments[2], arguments[3], arguments[4], arguments[5])
 
     print(
         "Usage: python -m autotune campaign validate <manifest.json>\n"
         "       python -m autotune campaign dossier initialize <manifest.json> <dossier.json>\n"
         "       python -m autotune campaign dossier add-technique <dossier.json> <technique.json>\n"
-        "       python -m autotune campaign evaluate <manifest.json> <scenario.json> <evidence.json>",
+        "       python -m autotune campaign evaluate <manifest.json> <scenario.json> <evidence.json>\n"
+        "       python -m autotune campaign decide <manifest.json> <dossier.json> <history.json> <decision.json>",
         file=sys.stderr,
     )
     return 2
