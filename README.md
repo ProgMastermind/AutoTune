@@ -103,6 +103,16 @@ requires authenticated GitHub CLI access because it selects and closes tickets.
 Both scripts require an authenticated Codex CLI. Use `AUTOTUNE_REPO_DIR` when
 invoking a copied runner from outside the AutoTune checkout.
 
+## Advisory agent roles
+
+AutoTune uses agents to research and propose, never to bypass execution or
+promotion gates. Copy `.env.example` to a local `.env` and set
+`OPENAI_API_KEY` when enabling the OpenAI-backed advisory executor. The tracked
+role map sends high-volume fact extraction and failure triage to GPT-5.6 Luna;
+GPT-5.6 Terra handles research synthesis, candidate design, policy criticism,
+and code-change proposals. See `docs/agentic-architecture.md` for the complete
+authority boundary and loop.
+
 ## Status
 
 The repository currently contains the platform definition and is being built

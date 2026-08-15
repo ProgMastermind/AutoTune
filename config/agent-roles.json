@@ -1,0 +1,38 @@
+{
+  "research_triage": {
+    "model_env": "AUTOTUNE_AGENT_RESEARCH_MODEL",
+    "default_model": "gpt-5.6-luna",
+    "purpose": "Extract source-linked facts from papers, repositories, profiles, and logs.",
+    "authority": "advisory_only"
+  },
+  "research_synthesis": {
+    "model_env": "AUTOTUNE_AGENT_REASONING_MODEL",
+    "default_model": "gpt-5.6-terra",
+    "purpose": "Turn dossier and experiment evidence into hypotheses and gaps.",
+    "authority": "advisory_only"
+  },
+  "candidate_design": {
+    "model_env": "AUTOTUNE_AGENT_REASONING_MODEL",
+    "default_model": "gpt-5.6-terra",
+    "purpose": "Propose one bounded reversible candidate and evaluation plan.",
+    "authority": "proposal_only"
+  },
+  "code_change_proposal": {
+    "model_env": "AUTOTUNE_AGENT_CODE_MODEL",
+    "default_model": "gpt-5.6-terra",
+    "purpose": "Draft a minimal source change after profiler and compatibility evidence support it.",
+    "authority": "draft_patch_only"
+  },
+  "failure_triage": {
+    "model_env": "AUTOTUNE_AGENT_RESEARCH_MODEL",
+    "default_model": "gpt-5.6-luna",
+    "purpose": "Classify failures and retry safety from logs and artifacts.",
+    "authority": "advisory_only"
+  },
+  "policy_critic": {
+    "model_env": "AUTOTUNE_AGENT_REASONING_MODEL",
+    "default_model": "gpt-5.6-terra",
+    "purpose": "Challenge unsafe assumptions, missing gates, and budget risk.",
+    "authority": "advisory_only"
+  }
+}
