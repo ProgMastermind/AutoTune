@@ -333,6 +333,62 @@ def decide_command(
     return 0
 
 
+def validate_promotion_evidence(evidence: Any, path: str) -> list[str]:
+    errors: list[str] = []
+    record = _required_mapping(evidence, path, errors)
+    _required_string(record.get("attempt_id"), f"{path}.attempt_id", errors)
+    if record.get("status") != "completed":
+        errors.append(f"{path}.status must be completed")
+    metrics = _required_mapping(record.get("metrics"), f"{path}.metrics", errors)
+    throughput = metrics.get("decode_tokens_per_second")
+    if isinstance(throughput, bool) or not isinstance(throughput, (int, float)):
+        errors.append(f"{path}.metrics.decode_tokens_per_second must be a number")
+    correctness = _required_mapping(record.get("correctness"), f"{path}.correctness", errors)
+    if not isinstance(correctness.get("passed"), bool):
+        errors.append(f"{path}.correctness.passed must be a boolean")
+    return errors
+
+
+def promote_command(
+    incumbent_path_value: str, candidate_path_value: str, promotion_path_value: str
+) -> int:
+    incumbent, incumbent_read_error = _read_json(Path(incumbent_path_value), "incumbent evidence")
+    if incumbent_read_error is not None:
+        return incumbent_read_error
+    candidate, candidate_read_error = _read_json(Path(candidate_path_value), "candidate evidence")
+    if candidate_read_error is not None:
+        return candidate_read_error
+    errors = validate_promotion_evidence(incumbent, "incumbent") + validate_promotion_evidence(
+        candidate, "candidate"
+    )
+    if errors:
+        print("Promotion evidence is invalid:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    if not candidate["correctness"]["passed"]:
+        promotion = {"action": "retain", "reason": "candidate_correctness_failed"}
+    elif candidate["metrics"]["decode_tokens_per_second"] <= incumbent["metrics"][
+        "decode_tokens_per_second"
+    ]:
+        promotion = {"action": "retain", "reason": "decode_throughput_not_improved"}
+    else:
+        old_value = incumbent["metrics"]["decode_tokens_per_second"]
+        new_value = candidate["metrics"]["decode_tokens_per_second"]
+        promotion = {
+            "action": "promote",
+            "incumbent_attempt_id": candidate["attempt_id"],
+            "reason": f"decode_tokens_per_second improved from {old_value} to {new_value}",
+        }
+
+    write_error = _write_json(Path(promotion_path_value), promotion)
+    if write_error:
+        return write_error
+    print(json.dumps({"action": promotion["action"]}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) == 3 and arguments[:2] == ["campaign", "validate"]:
@@ -345,13 +401,16 @@ def main(argv: list[str] | None = None) -> int:
         return evaluate_command(arguments[2], arguments[3], arguments[4])
     if len(arguments) == 6 and arguments[:2] == ["campaign", "decide"]:
         return decide_command(arguments[2], arguments[3], arguments[4], arguments[5])
+    if len(arguments) == 5 and arguments[:2] == ["campaign", "promote"]:
+        return promote_command(arguments[2], arguments[3], arguments[4])
 
     print(
         "Usage: python -m autotune campaign validate <manifest.json>\n"
         "       python -m autotune campaign dossier initialize <manifest.json> <dossier.json>\n"
         "       python -m autotune campaign dossier add-technique <dossier.json> <technique.json>\n"
         "       python -m autotune campaign evaluate <manifest.json> <scenario.json> <evidence.json>\n"
-        "       python -m autotune campaign decide <manifest.json> <dossier.json> <history.json> <decision.json>",
+        "       python -m autotune campaign decide <manifest.json> <dossier.json> <history.json> <decision.json>\n"
+        "       python -m autotune campaign promote <incumbent.json> <candidate.json> <promotion.json>",
         file=sys.stderr,
     )
     return 2
