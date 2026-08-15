@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotune"
+version = "0.1.0"
+description = "Closed-loop LLM inference optimization campaigns"
+requires-python = ">=3.11"
