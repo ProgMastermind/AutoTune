@@ -84,6 +84,25 @@ test-driven development. The public test seam is the campaign command: local
 tests use fake providers, while production campaigns use real RunPod and ATOM
 adapters.
 
+## Codex ticket runner
+
+The `ralph/` scripts turn a ready-for-agent GitHub issue into one fresh,
+non-interactive Codex run. They never reuse a previous agent session.
+
+```bash
+# Run one specific ticket from the AutoTune checkout.
+ralph/once.sh 13
+
+# Run up to five currently open ready-for-agent tickets, one process each.
+ralph/afk.sh 5
+```
+
+`once.sh` can read public issue data with `curl` and `jq`; authenticated GitHub
+CLI access is required to comment on and close a completed ticket. `afk.sh`
+requires authenticated GitHub CLI access because it selects and closes tickets.
+Both scripts require an authenticated Codex CLI. Use `AUTOTUNE_REPO_DIR` when
+invoking a copied runner from outside the AutoTune checkout.
+
 ## Status
 
 The repository currently contains the platform definition and is being built
