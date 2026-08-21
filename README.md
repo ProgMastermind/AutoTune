@@ -1,120 +1,183 @@
 # AutoTune
 
-AutoTune is a closed-loop optimization platform for LLM inference. It runs an
-optimization **campaign**: establish a reproducible baseline, choose one
-bounded change, test it, preserve the evidence, and keep only changes that
-improve the campaign's measured result without breaking correctness or the
-campaign budget.
+**Closed-loop, evidence-gated optimization for LLM inference.**
 
-The first campaign targets `openai/gpt-oss-120b` on AMD MI300X GPUs using the
-ATOM serving engine and the aiter kernel library. AutoTune is intentionally
-not a one-model tuning script. Later campaigns will describe their own model,
-workload, runtime, and limits while using the same evaluation and promotion
-loop.
+AutoTune runs *campaigns*: bounded, reproducible searches for the best sustainable inference performance a given model can reach on a given runtime. Every change is measured against a baseline, every measurement is preserved as evidence, and only changes that improve throughput **without breaking correctness** are promoted.
 
-## What AutoTune optimizes
+It is not a one-model tuning script. A campaign declares its own model, workload, runtime, quality gates, and budget — the evaluate-and-promote loop stays the same.
 
-There is no predeclared throughput target. A campaign searches for the best
-**sustainable** result it can find within its explicit time, cost, attempt, and
-quality budget.
+## Why
 
-The search is system-wide. Depending on the campaign evidence, it can evaluate:
+Tuning LLM inference today is mostly ad-hoc: try a flag, eyeball a benchmark number, keep it if it looks faster. AutoTune replaces that with a controlled experiment loop:
 
-- serving strategies such as speculative decoding and draft models;
-- batching, parallelism, and engine configuration;
-- environment, dependency, and upstream-version combinations;
-- profile-guided kernel, dispatch, and source changes.
-
-Profiling is an important source of evidence, but it is not the only source of
-ideas. The model architecture, known runtime compatibility, experiment history,
-and relevant upstream improvements also inform the next candidate.
-
-## Initial operating envelope
-
-| Component | Initial choice |
-| --- | --- |
-| Accelerator | AMD MI300X, `gfx942`, 304 compute units |
-| Serving stack | ATOM / vLLM-ROCm |
-| Kernel library | aiter (Triton and CK/FlyDSL paths) |
-| First model | `openai/gpt-oss-120b` |
-| Primary objective | Attainable, repeatable decode-throughput frontier |
-
-The platform records the exact workload, quality gates, measurement protocol,
-and comparison rule in each campaign. A result is therefore meaningful only in
-the context of its campaign contract.
+- **Reproducible** — every attempt records its exact environment, commands, and source revisions.
+- **Bounded** — campaigns run under explicit time, cost, and attempt budgets; no unbounded search.
+- **Honest** — results are only comparable within a campaign's declared workload and measurement protocol.
+- **Safe** — candidates are reversible, isolated from `main`, and gated by deterministic correctness and comparison checks before they can become the new baseline.
 
 ## How a campaign works
 
-1. Validate a campaign contract and model dossier.
-2. Create a baseline run with complete environment and benchmark provenance.
-3. Select one candidate intervention from a bounded policy.
-4. Provision and run the required environment, benchmark, and optional profile.
-5. Store metrics, artifacts, failures, source revisions, and decisions as an
-   evidence bundle.
-6. Compare the candidate with the incumbent using the campaign's promotion
-   rule.
-7. Promote, revert, or learn from the outcome, then continue until budget or
-   stop rules are reached.
-
-## Safety and promotion
-
-Experiments never mutate `main`. A source or dependency candidate begins from
-a pinned revision on an isolated `candidate/<campaign>/<candidate-id>` branch.
-Dependency changes are pinned to exact versions or commits.
-
-Before a candidate can become an incumbent, it must pass allowed-path and diff
-policy checks, secret scanning, build and smoke checks, deterministic
-correctness checks, the campaign evaluation contract, evidence validation, and
-replay verification. Source changes are proposed as draft pull requests with
-their provenance and benchmark comparison. Reversions are first-class
-candidates.
-
-AutoTune never automates model-weight uploads, binaries, secrets, permission
-changes, or unreviewed workflow changes.
-
-## Delivery roadmap
-
-The first implementation sequence is deliberately vertical: campaign
-validation, model dossier, deterministic evaluation/evidence, budgeted decision
-loop, RunPod execution, an ATOM baseline, serving-strategy candidates,
-profile-guided source candidates, and evidence-gated promotion.
-
-Each ticket is implemented in a separate fresh Codex execution using
-test-driven development. The public test seam is the campaign command: local
-tests use fake providers, while production campaigns use real RunPod and ATOM
-adapters.
-
-## Codex ticket runner
-
-The `ralph/` scripts turn a ready-for-agent GitHub issue into one fresh,
-non-interactive Codex run. They never reuse a previous agent session.
-
-```bash
-# Run one specific ticket from the AutoTune checkout.
-ralph/once.sh 13
-
-# Run up to five currently open ready-for-agent tickets, one process each.
-ralph/afk.sh 5
+```
+            ┌──────────────────────────────────────────────────┐
+            │                Campaign Contract                 │
+            │  model · target runtime · evaluation · budget    │
+            └───────────────────────┬──────────────────────────┘
+                                    ▼
+   ┌─────────┐   candidate   ┌───────────┐   metrics    ┌──────────────┐
+   │ Decide  ├──────────────►│ Evaluate  ├─────────────►│   Evidence   │
+   │ (budget)│               │  attempt  │              │    Bundle    │
+   └────▲────┘               └───────────┘              └──────┬───────┘
+        │ stop / continue                                      ▼
+        │                                              ┌──────────────┐
+        └──────────────────────────────────────────────┤   Promote    │
+                    promote · retain · learn           │ (gated)      │
+                                                       └──────────────┘
 ```
 
-`once.sh` can read public issue data with `curl` and `jq`; authenticated GitHub
-CLI access is required to comment on and close a completed ticket. `afk.sh`
-requires authenticated GitHub CLI access because it selects and closes tickets.
-Both scripts require an authenticated Codex CLI. Use `AUTOTUNE_REPO_DIR` when
-invoking a copied runner from outside the AutoTune checkout.
+1. **Validate** the campaign contract and initialize the model dossier.
+2. **Decide** the next candidate — one bounded, reversible intervention chosen from the technique catalog, or stop when the budget is exhausted.
+3. **Evaluate** the candidate against the incumbent using the campaign's benchmark profile.
+4. **Record** the outcome as an immutable evidence bundle (inputs, environment, commands, metrics or failure).
+5. **Promote** the candidate to incumbent only if correctness passed and measured decode throughput strictly improved; otherwise retain the incumbent and learn from the result.
 
-## Advisory agent roles
+## Core concepts
 
-AutoTune uses agents to research and propose, never to bypass execution or
-promotion gates. Copy `.env.example` to a local `.env` and set
-`OPENAI_API_KEY` when enabling the OpenAI-backed advisory executor. The tracked
-role map sends high-volume fact extraction and failure triage to GPT-5.6 Luna;
-GPT-5.6 Terra handles research synthesis, candidate design, policy criticism,
-and code-change proposals. See `docs/agentic-architecture.md` for the complete
-authority boundary and loop.
+| Concept | Meaning |
+| --- | --- |
+| **Campaign** | One bounded search for the best sustainable result for a declared model, workload, runtime, and budget |
+| **Campaign contract** | The validated declaration of model, target runtime, evaluation profile, correctness requirements, comparison rule, and budget |
+| **Model dossier** | Versioned record of model architecture and runtime facts that constrain candidate selection |
+| **Technique catalog** | Candidate techniques a campaign may consider, each with a lane, preconditions, and provenance |
+| **Candidate** | One reversible intervention evaluated against the current incumbent |
+| **Attempt** | One execution of a baseline or candidate evaluation |
+| **Evidence bundle** | Immutable record of an attempt: inputs, environment, commands, metrics, artifacts, failures |
+| **Incumbent** | The best configuration that has passed the promotion rule so far |
+| **Promotion** | The evidence-gated act of making a candidate the new incumbent |
+
+## First campaign
+
+| Component | Choice |
+| --- | --- |
+| Accelerator | AMD MI300X (`gfx942`, 304 compute units) |
+| Serving stack | ATOM / vLLM-ROCm |
+| Kernel library | aiter (Triton and CK/FlyDSL paths) |
+| Model | `openai/gpt-oss-120b` |
+| Objective | Repeatable decode-throughput frontier |
+
+Depending on campaign evidence, the search space includes serving strategies (speculative decoding, draft models), batching and parallelism configuration, environment and dependency combinations, and profile-guided kernel or source changes.
+
+## Installation
+
+Requires Python 3.11+.
+
+```bash
+git clone https://github.com/ProgMastermind/AutoTune.git
+cd AutoTune
+pip install -e .
+```
+
+## Quickstart
+
+A campaign starts as a JSON manifest:
+
+```json
+{
+  "campaign_id": "gpt-oss-120b-mi300x",
+  "model": {
+    "id": "openai/gpt-oss-120b",
+    "architecture": "gpt-oss"
+  },
+  "target": {
+    "accelerator": "AMD MI300X",
+    "gpu_arch": "gfx942",
+    "compute_units": 304,
+    "serving_engine": "atom",
+    "kernel_library": "aiter"
+  },
+  "evaluation": {
+    "primary_profile": {
+      "benchmark_id": "decode-throughput",
+      "repeat_count": 3
+    }
+  },
+  "budget": {
+    "max_attempts": 10
+  }
+}
+```
+
+Then drive the loop with the campaign CLI:
+
+```bash
+# 1. Validate the contract
+python -m autotune campaign validate manifest.json
+
+# 2. Initialize the model dossier
+python -m autotune campaign dossier initialize manifest.json dossier.json
+
+# 3. Register a technique the campaign may evaluate
+python -m autotune campaign dossier add-technique dossier.json technique.json
+
+# 4. Ask the budget governor what to do next
+python -m autotune campaign decide manifest.json dossier.json history.json decision.json
+
+# 5. Turn a completed (or failed) attempt into an evidence bundle
+python -m autotune campaign evaluate manifest.json scenario.json evidence.json
+
+# 6. Compare candidate evidence against the incumbent
+python -m autotune campaign promote incumbent.json candidate.json promotion.json
+```
+
+Every command validates its inputs and exits non-zero with specific errors on invalid contracts, scenarios, or evidence — bad data never becomes evidence.
+
+## Promotion rule
+
+A candidate becomes the incumbent only when **all** of the following hold:
+
+1. Its attempt completed successfully.
+2. Deterministic correctness checks passed.
+3. Measured `decode_tokens_per_second` is strictly greater than the incumbent's.
+
+Otherwise the incumbent is retained and the reason is recorded. Reverting a regression is a first-class outcome, not a failure.
+
+## Safety model
+
+- Experiments never mutate `main`; source and dependency candidates start from pinned revisions on isolated branches.
+- Dependency changes are pinned to exact versions or commits.
+- Before promotion, candidates pass diff-policy checks, secret scanning, build and smoke checks, correctness checks, evidence validation, and replay verification.
+- AutoTune never automates model-weight uploads, binaries, secrets, permission changes, or unreviewed workflow changes.
+
+## Agentic architecture
+
+AutoTune separates **advice** from **authority**. LLM agents research and propose; deterministic controls own execution, measurement, and promotion:
+
+| Role | Responsibility | Authority |
+| --- | --- | --- |
+| Research triage | High-volume fact extraction from papers, issues, profiles, logs | Advisory only |
+| Research synthesis | Combine dossier + history into evidence-backed findings | Advisory only |
+| Candidate design | Propose one bounded, reversible intervention | Proposal only |
+| Policy critic | Challenge unsafe assumptions and budget risk | Advisory only |
+| Failure triage | Classify failed attempts, advise on retry safety | Advisory only |
+| Code-change proposal | Draft minimal patches for verified bottlenecks | Draft patch only |
+
+An agent can never execute a change, write evidence, or promote an incumbent. See [`docs/agentic-architecture.md`](docs/agentic-architecture.md) for the full authority boundary.
+
+To enable the OpenAI-backed advisory executor, copy `.env.example` to `.env` and set `OPENAI_API_KEY`. Credentials stay local and are never written into manifests, evidence bundles, or source files.
+
+## Project layout
+
+```
+config/    Agent role map (models, purposes, authority levels)
+docs/      Architecture documentation
+src/autotune/  Campaign CLI and core logic
+tests/     Test suite (fake providers; no GPU required)
+ralph/     Development automation scripts
+```
 
 ## Status
 
-The repository currently contains the platform definition and is being built
-from the campaign contract outward. It does not yet provision GPUs, run ATOM,
-or claim a performance gain.
+The campaign core — contract validation, dossier management, budgeted decisions, evidence bundles, and gated promotion — is implemented and tested. Remote GPU provisioning, the ATOM baseline, and live agent execution are under active development. AutoTune does not yet claim a performance gain; the first campaign will publish its baseline and evidence when it runs.
+
+## Contributing
+
+Issues are used to track campaign work. Bug reports and discussion are welcome — please open an issue describing the campaign context if applicable.
